@@ -58,6 +58,8 @@ const skillsByAge: Record<string, Skill[]> = {
 
 export default function ProductsPage() {
   const [containers, setContainers] = useState<ProductContainer[]>([])
+  const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
+  const newProductRef = useRef<HTMLDivElement>(null)
 
   // Fetch products on mount
   useEffect(() => {
@@ -148,6 +150,11 @@ export default function ProductsPage() {
       isEditing: true
     }
     setContainers(prev => [...prev, newProduct])
+    
+    // Wait for the DOM to update before scrolling
+    setTimeout(() => {
+      newProductRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 100)
   }
 
   const toggleEdit = (id: number) => {
@@ -239,20 +246,30 @@ export default function ProductsPage() {
     }
   }
 
-  const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
-
   return (
     <div className="container mx-auto px-4 py-10 min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-teal-50 rounded-xl shadow-lg">
       <h1 className="text-4xl font-extrabold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-slate-600 to-teal-600 drop-shadow">
         Product Management
       </h1>
-      <p className="text-lg text-gray-700 mb-10 font-medium">
-        Upload and manage products for each age group and skill
-      </p>
+      <div className="flex justify-between items-center mb-10">
+        <p className="text-lg text-gray-700 font-medium">
+          Upload and manage products for each age group and skill
+        </p>
+        <button
+          onClick={handleAddContainer}
+          className="px-4 py-2 md:px-6 md:py-3 bg-gradient-to-r from-green-500 to-teal-500 text-white rounded-lg transition shadow-lg font-medium text-sm md:text-base"
+        >
+          + Add New Product
+        </button>
+      </div>
       
       <div className="space-y-6">
-        {containers.map(container => (
-          <div key={container.id} className="p-6 bg-white rounded-lg shadow-lg border border-blue-100">
+        {containers.map((container, index) => (
+          <div 
+            key={container.id} 
+            ref={index === containers.length - 1 ? newProductRef : null}
+            className="p-6 bg-white rounded-lg shadow-lg border border-blue-100"
+          >
             <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-4">
               <div className="space-y-2 w-full">
                 <input
@@ -398,10 +415,10 @@ export default function ProductsPage() {
         ))}
       </div>
 
-      <div className="flex gap-4 mt-6">
+      <div className="flex justify-center gap-4 mt-6">
         <button
           onClick={handleAddContainer}
-          className={`px-4 py-2 md:px-6 md:py-3 bg-gradient-to-r from-green-500 to-teal-500 text-white rounded-lg transition shadow-lg font-medium text-sm md:text-base flex-1 md:flex-none`}
+          className="px-4 py-2 md:px-6 md:py-3 bg-gradient-to-r from-green-500 to-teal-500 text-white rounded-lg transition shadow-lg font-medium text-sm md:text-base"
         >
           + Add New Product
         </button>

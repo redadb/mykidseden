@@ -1,5 +1,6 @@
 'use client'
 import { useState, useRef, ChangeEvent, useEffect } from 'react'
+import { toast } from 'react-hot-toast'
 
 interface AgeGroup {
   age: string
@@ -16,7 +17,9 @@ interface ProductContainer {
   productName: string
   ageGroup: string
   skill: string
+  description: string
   image: string | null
+  isEditing?: boolean
 }
 
 const ageGroups: AgeGroup[] = [
@@ -54,179 +57,189 @@ const skillsByAge: Record<string, Skill[]> = {
 }
 
 export default function ProductsPage() {
-  const [containers, setContainers] = useState<ProductContainer[]>([
-    { id: 1, title: "", productName: "", ageGroup: "", skill: "", image: null }
-  ])
+  const [containers, setContainers] = useState<ProductContainer[]>([])
 
+  // Fetch products on mount
   useEffect(() => {
-    const fetchProducts = async () => {
-      const response = await fetch('/api/products');
-      const data = await response.json();
-      setContainers(data.length ? data : [
-        { id: 1, title: "", productName: "", ageGroup: "", skill: "", image: null }
-      ]);
-    };
-    fetchProducts();
-  }, []);
+    fetchProducts()
+  }, [])
 
-  const handleSaveProducts = async () => {
-    // Validation: no empty or duplicate productName
-    const validProducts = containers.filter(c => c.title && c.ageGroup && c.skill)
-    
-    // Use title as productName if not provided
-    const productsToSave = validProducts.map(product => ({
-      ...product,
-      productName: product.productName || product.title
-    }))
-    
-    const productNames = productsToSave.map(p => p.productName.trim())
-    const hasEmpty = productNames.some(name => !name)
-    const hasDuplicate = new Set(productNames).size !== productNames.length
-    
-    if (hasEmpty) {
-      alert('All products must have a non-empty Product Name.')
+  const fetchProducts = async () => {
+    try {
+      const response = await fetch('/api/products')
+      const data = await response.json()
+      // Map database fields to component fields
+      const mappedData = data.map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        productName: item.product_name,
+        ageGroup: item.age_group,
+        skill: item.skill,
+        description: item.description || '',
+        image: item.image,
+        isEditing: false
+      }))
+      setContainers(mappedData)
+    } catch (error) {
+      console.error('Error fetching products:', error)
+      toast.error('Failed to load products')
+    }
+  }
+
+  const handleSaveProduct = async (product: ProductContainer) => {
+    if (!product.title || !product.ageGroup || !product.skill) {
+      toast.error('Please fill in all required fields (Title, Age Group, and Skill)')
       return
     }
-    if (hasDuplicate) {
-      alert('Product Names must be unique.')
-      return
-    }
-    
+
     try {
       const response = await fetch('/api/products', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(productsToSave),
-      });
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([{
+          ...product,
+          productName: product.productName || product.title,
+          description: product.description || ''
+        }])
+      })
+
       if (!response.ok) {
-        throw new Error('Failed to save products');
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to save product')
       }
-      // Refresh the product list after save
-      const data = await fetch('/api/products');
-      const products = await data.json();
-      setContainers([
-        ...products,
-        {
-          id: Date.now() * -1,
-          title: "",
-          productName: "",
-          ageGroup: "",
-          skill: "",
-          image: null
-        }
-      ]);
-      alert('Products saved successfully!');
+
+      const savedData = await response.json()
+      const savedProduct = savedData[0]
+      
+      // Map database fields to component fields
+      const mappedProduct = {
+        id: savedProduct.id,
+        title: savedProduct.title,
+        productName: savedProduct.product_name,
+        ageGroup: savedProduct.age_group,
+        skill: savedProduct.skill,
+        description: savedProduct.description || '',
+        image: savedProduct.image,
+        isEditing: false
+      }
+      
+      // Update containers state
+      setContainers(prev => prev.map(c => 
+        c.id === product.id ? mappedProduct : c
+      ))
+
+      toast.success('Product saved successfully!')
     } catch (error) {
-      alert('Error saving products');
-      console.error(error);
+      console.error('Save error:', error)
+      toast.error(error instanceof Error ? error.message : 'Failed to save product')
     }
-  };
-  const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
+  }
 
   const handleAddContainer = () => {
-    // Use a unique negative id for new products
-    const newId = Date.now() * -1;
-    setContainers([...containers, {
-      id: newId,
+    // Create new product with temporary negative ID
+    const newProduct: ProductContainer = {
+      id: Date.now() * -1,
       title: "",
       productName: "",
       ageGroup: "",
       skill: "",
-      image: null
-    }])
+      description: "",
+      image: null,
+      isEditing: true
+    }
+    setContainers(prev => [...prev, newProduct])
   }
 
-  const handleTitleChange = (id: number, value: string) => {
-    setContainers(containers.map(container => 
-      container.id === id ? { ...container, title: value } : container
+  const toggleEdit = (id: number) => {
+    setContainers(prev => prev.map(container =>
+      container.id === id ? { ...container, isEditing: !container.isEditing } : container
     ))
   }
 
-  const handleAgeChange = (id: number, value: string) => {
-    setContainers(containers.map(container => 
-      container.id === id ? { ...container, ageGroup: value, skill: "" } : container
-    ))
+  const handleDeleteContainer = async (id: number) => {
+    try {
+      // For new products (negative IDs), just remove from state
+      if (id < 0) {
+        setContainers(prev => prev.filter(c => c.id !== id))
+        return
+      }
+
+      // For existing products, call the DELETE API
+      const response = await fetch(`/api/products?id=${id}`, {
+        method: 'DELETE'
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to delete product')
+      }
+
+      const data = await response.json()
+      // Map database fields to component fields
+      const mappedData = data.map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        productName: item.product_name,
+        ageGroup: item.age_group,
+        skill: item.skill,
+        description: item.description || '',
+        image: item.image,
+        isEditing: false
+      }))
+      
+      setContainers(mappedData)
+      toast.success('Product deleted successfully')
+    } catch (error) {
+      console.error('Delete error:', error)
+      toast.error('Failed to delete product')
+    }
   }
 
-  const handleSkillChange = (id: number, value: string) => {
-    setContainers(containers.map(container => 
-      container.id === id ? { ...container, skill: value } : container
+  // Simple field update handlers
+  const handleFieldChange = (id: number, field: keyof ProductContainer, value: string) => {
+    setContainers(prev => prev.map(container =>
+      container.id === id ? {
+        ...container,
+        [field]: value,
+        // Reset skill if changing age group
+        ...(field === 'ageGroup' ? { skill: '' } : {})
+      } : container
     ))
   }
 
   const handleImageUpload = async (id: number, e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file) {
+    if (!file) return
+
+    try {
       const formData = new FormData()
       formData.append('file', file)
+      
+      const loadingToast = toast.loading('Uploading image...')
+      
       const response = await fetch('/api/products/upload', {
         method: 'POST',
-        body: formData,
+        body: formData
       })
+      
       const data = await response.json()
-      if (data.url) {
-        setContainers(containers.map(container =>
-          container.id === id ? { ...container, image: data.url } : container
-        ))
-      } else {
-        alert('Image upload failed')
+      toast.dismiss(loadingToast)
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to upload image')
       }
+
+      setContainers(prev => prev.map(container =>
+        container.id === id ? { ...container, image: data.url } : container
+      ))
+      
+      toast.success('Image uploaded successfully!')
+    } catch (error) {
+      console.error('Image upload error:', error)
+      toast.error(error instanceof Error ? error.message : 'Failed to upload image')
     }
   }
 
-  const handleDeleteContainer = async (id: number) => {
-    // For new products (negative IDs), just remove from state
-    if (id < 0) {
-      if (containers.length > 1) {
-        setContainers(containers.filter(container => container.id !== id));
-      } else {
-        // Reset to empty state if deleting last product
-        setContainers([{ 
-          id: Date.now() * -1,
-          title: "",
-          productName: "",
-          ageGroup: "",
-          skill: "",
-          image: null
-        }]);
-      }
-      return;
-    }
-    
-    // For existing products (positive IDs), call the DELETE API
-    try {
-      const response = await fetch(`/api/products?id=${id}`, {
-        method: 'DELETE',
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to delete product');
-      }
-      
-      // Update the product list with the response
-      const updatedProducts = await response.json();
-      
-      // If no products left, add an empty one
-      if (updatedProducts.length === 0) {
-        setContainers([{ 
-          id: Date.now() * -1,
-          title: "",
-          productName: "",
-          ageGroup: "",
-          skill: "",
-          image: null
-        }]);
-      } else {
-        setContainers(updatedProducts);
-      }
-      
-    } catch (error) {
-      alert('Error deleting product');
-      console.error(error);
-    }
-  }
+  const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
 
   return (
     <div className="container mx-auto px-4 py-10 min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-teal-50 rounded-xl shadow-lg">
@@ -246,24 +259,56 @@ export default function ProductsPage() {
                   type="text"
                   value={container.title}
                   placeholder="Product title"
-                  onChange={(e) => handleTitleChange(container.id, e.target.value)}
-                  className="text-lg md:text-xl font-semibold border-b-2 border-blue-200 focus:border-blue-500 outline-none bg-transparent pb-1 w-full"
+                  onChange={(e) => handleFieldChange(container.id, 'title', e.target.value)}
+                  disabled={!container.isEditing}
+                  className={`text-lg md:text-xl font-semibold border-b-2 border-blue-200 focus:border-blue-500 outline-none bg-transparent pb-1 w-full ${!container.isEditing ? 'opacity-75' : ''}`}
                 />
                 <input
                   type="text"
                   value={container.productName}
                   placeholder="Product name (optional)"
-                  onChange={(e) => setContainers(containers.map(c => 
-                    c.id === container.id ? {...c, productName: e.target.value} : c
-                  ))}
-                  className="text-sm md:text-base border-b border-blue-100 focus:border-blue-300 outline-none bg-transparent pb-1 w-full"
+                  onChange={(e) => handleFieldChange(container.id, 'productName', e.target.value)}
+                  disabled={!container.isEditing}
+                  className={`text-sm md:text-base border-b border-blue-100 focus:border-blue-300 outline-none bg-transparent pb-1 w-full ${!container.isEditing ? 'opacity-75' : ''}`}
+                />
+                <textarea
+                  value={container.description}
+                  placeholder="Short description"
+                  onChange={(e) => handleFieldChange(container.id, 'description', e.target.value)}
+                  disabled={!container.isEditing}
+                  className={`text-sm md:text-base border-b border-blue-100 focus:border-blue-300 outline-none bg-transparent pb-1 w-full resize-none h-20 ${!container.isEditing ? 'opacity-75' : ''}`}
                 />
               </div>
               <div className="flex gap-1">
+                {container.isEditing ? (
+                  <button
+                    onClick={() => handleSaveProduct(container)}
+                    className="p-2 bg-green-100 text-green-600 rounded-lg hover:bg-green-200 transition-all"
+                    title="Save product"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                      <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                      <polyline points="7 3 7 8 15 8"></polyline>
+                    </svg>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => toggleEdit(container.id)}
+                    className="p-2 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-all"
+                    title="Edit product"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                  </button>
+                )}
                 <button 
                   onClick={() => document.getElementById(`file-input-${container.id}`)?.click()}
-                  className="p-2 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-all"
+                  className={`p-2 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-all ${!container.isEditing ? 'opacity-50 cursor-not-allowed' : ''}`}
                   title="Upload image"
+                  disabled={!container.isEditing}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -287,6 +332,7 @@ export default function ProductsPage() {
                   accept="image/*"
                   onChange={(e) => handleImageUpload(container.id, e)}
                   className="hidden"
+                  disabled={!container.isEditing}
                   ref={el => { if (el) fileInputRefs.current[container.id] = el }}
                 />
               </div>
@@ -298,8 +344,9 @@ export default function ProductsPage() {
                 <div className="relative">
                   <select
                     value={container.ageGroup}
-                    onChange={(e) => handleAgeChange(container.id, e.target.value)}
-                    className="w-full pl-3 pr-8 py-1.5 md:py-2 border-2 border-blue-100 rounded-lg focus:border-blue-500 outline-none bg-white appearance-none hover:border-blue-200 transition text-sm md:text-base"
+                    onChange={(e) => handleFieldChange(container.id, 'ageGroup', e.target.value)}
+                    disabled={!container.isEditing}
+                    className={`w-full pl-3 pr-8 py-1.5 md:py-2 border-2 border-blue-100 rounded-lg focus:border-blue-500 outline-none bg-white appearance-none hover:border-blue-200 transition text-sm md:text-base ${!container.isEditing ? 'opacity-75' : ''}`}
                   >
                     <option value="">Select Age Group</option>
                     {ageGroups.map(group => (
@@ -320,9 +367,9 @@ export default function ProductsPage() {
                 <div className="relative">
                   <select
                     value={container.skill}
-                    onChange={(e) => handleSkillChange(container.id, e.target.value)}
-                    className="w-full pl-3 pr-8 py-2 border-2 border-blue-100 rounded-lg focus:border-blue-500 outline-none bg-white appearance-none hover:border-blue-200 transition"
-                    disabled={!container.ageGroup}
+                    onChange={(e) => handleFieldChange(container.id, 'skill', e.target.value)}
+                    disabled={!container.isEditing || !container.ageGroup}
+                    className={`w-full pl-3 pr-8 py-2 border-2 border-blue-100 rounded-lg focus:border-blue-500 outline-none bg-white appearance-none hover:border-blue-200 transition ${!container.isEditing || !container.ageGroup ? 'opacity-75' : ''}`}
                   >
                     <option value="">Select Skill</option>
                     {container.ageGroup && skillsByAge[container.ageGroup]?.map(skill => (
@@ -354,15 +401,9 @@ export default function ProductsPage() {
       <div className="flex gap-4 mt-6">
         <button
           onClick={handleAddContainer}
-          className="px-4 py-2 md:px-6 md:py-3 bg-gradient-to-r from-green-500 to-teal-500 text-white rounded-lg hover:opacity-90 transition shadow-lg font-medium text-sm md:text-base flex-1 md:flex-none"
+          className={`px-4 py-2 md:px-6 md:py-3 bg-gradient-to-r from-green-500 to-teal-500 text-white rounded-lg transition shadow-lg font-medium text-sm md:text-base flex-1 md:flex-none`}
         >
           + Add New Product
-        </button>
-        <button
-          onClick={handleSaveProducts}
-          className="px-4 py-2 md:px-6 md:py-3 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-lg hover:opacity-90 transition shadow-lg font-medium text-sm md:text-base flex-1 md:flex-none"
-        >
-          💾 Save All Products
         </button>
       </div>
     </div>

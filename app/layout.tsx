@@ -4,6 +4,7 @@ import "./globals.css"
 import Link from "next/link"
 import { Users, CalendarDays, BarChart2, FileText, BookOpen, ShoppingCart } from "lucide-react"
 import { MobileNav } from "@/components/ui/mobile-nav"
+import { Toaster } from 'react-hot-toast'
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -62,6 +63,7 @@ export default function RootLayout({
             {children}
           </main>
           <MobileNav />
+          <Toaster position="top-right" />
         </div>
       </body>
     </html>

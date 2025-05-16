@@ -1,127 +1,177 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { supabase } from '@/lib/supabase'
+import type { Database } from '@/types/supabase'
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
+// Helper function to handle database errors
+function handleDatabaseError(error: unknown) {
+  console.error('Database error details:', {
+    error,
+    name: error instanceof Error ? error.name : 'Unknown',
+    message: error instanceof Error ? error.message : 'Unknown error message',
+    stack: error instanceof Error ? error.stack : 'No stack trace'
+  })
+
+  if (error instanceof Error) {
+    return NextResponse.json({
+      error: 'Server error',
+      message: error.message,
+      stack: error.stack
+    }, { status: 500 })
+  }
+
+  return NextResponse.json({
+    error: 'Unknown database error',
+    details: String(error)
+  }, { status: 500 })
 }
 
 export async function GET() {
   try {
-    const products = await prisma.product.findMany()
-    return NextResponse.json(products)
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching products:', error)
+      return NextResponse.json({ error: 'Failed to fetch products' }, { status: 500 })
+    }
+
+    return NextResponse.json(data)
   } catch (error) {
-    return NextResponse.json([], { status: 200 })
+    console.error('Error in GET /api/products:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const productsData = await request.json()
-    const productsArray = Array.isArray(productsData) ? productsData : [productsData]
+    // Parse JSON data
+    const products = await request.json()
+    const productsArray = Array.isArray(products) ? products : [products]
     
-    // Validate all products
-    for (const product of productsArray) {
-      if (!product.title || !product.ageGroup || !product.skill) {
-        return NextResponse.json(
-          { error: 'Missing required fields' },
-          { status: 400 }
-        )
-      }
-      const validAgeGroups = ['2-3', '4-5', '6-7', '8-9']
-      if (!validAgeGroups.includes(product.ageGroup)) {
-        return NextResponse.json(
-          { error: 'Invalid age group' },
-          { status: 400 }
-        )
-      }
+    // Get the first product since we're now handling one at a time
+    const product = productsArray[0]
+    
+    // Validate required fields
+    if (!product.title || !product.ageGroup || !product.skill) {
+      return NextResponse.json({
+        error: 'Missing required fields',
+        details: 'Title, Age Group, and Skill are required'
+      }, { status: 400 })
     }
 
-    // Get all existing products
-    const incomingProductNames = productsArray.map((p: any) => p.productName)
+    const productName = (product.productName || product.title).trim()
+    const isNew = product.id < 0
 
-    // Delete products not in the incoming list
-    await prisma.product.deleteMany({
-      where: {
-        productName: {
-          notIn: incomingProductNames,
-        },
-      },
-    })
+    // Check for duplicate names
+    const { data: existingProduct, error: checkError } = await supabase
+      .from('products')
+      .select('id')
+      .eq('product_name', productName)
+      .neq('id', isNew ? -1 : product.id)
+      .maybeSingle()
 
-    // Upsert (add or update) each product
-    for (const product of productsArray) {
-      let whereClause: any;
-      if (typeof product.id === 'number' && product.id > 0) {
-        // Only use id for existing products (positive id)
-        whereClause = { id: product.id };
-      } else {
-        // For new products (negative id), use productName
-        whereClause = { productName: product.productName };
-      }
-      await prisma.product.upsert({
-        where: whereClause,
-        update: {
-          title: product.title,
-          ageGroup: product.ageGroup,
-          skill: product.skill,
-          image: product.image,
-        },
-        create: {
-          title: product.title,
-          productName: product.productName || product.title, // Use title as productName if not provided
-          ageGroup: product.ageGroup,
-          skill: product.skill,
-          image: product.image,
-        },
-      })
+    if (checkError) {
+      console.error('Error checking for duplicate product:', checkError)
+      throw checkError
     }
 
-    // Return the updated product list
-    const updatedProducts = await prisma.product.findMany()
-    return NextResponse.json(updatedProducts)
+    if (existingProduct) {
+      return NextResponse.json({ 
+        error: 'Duplicate product name',
+        details: 'A product with this name already exists'
+      }, { status: 400 })
+    }
+
+    // Prepare product data
+    const productData = {
+      title: product.title.trim(),
+      product_name: productName,
+      age_group: product.ageGroup.trim(),
+      skill: product.skill.trim(),
+      description: product.description?.trim() || '',
+      image: product.image || null
+    }
+
+    let result
+    if (isNew) {
+      // Insert new product
+      const { data, error } = await supabase
+        .from('products')
+        .insert(productData)
+        .select()
+        .single()
+
+      if (error) throw error
+      result = data
+    } else {
+      // Update existing product
+      const { data, error } = await supabase
+        .from('products')
+        .update(productData)
+        .eq('id', product.id)
+        .select()
+        .single()
+
+      if (error) throw error
+      result = data
+    }
+
+    return NextResponse.json([result])
   } catch (error) {
-    return NextResponse.json(
-      { error: 'Failed to save products' },
-      { status: 500 }
-    )
+    console.error('Error in POST /api/products:', error)
+    return NextResponse.json({ 
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 500 })
   }
 }
 
 export async function DELETE(request: Request) {
   try {
-    // Get the product ID from the URL search params
-    const url = new URL(request.url);
-    const id = url.searchParams.get('id');
+    console.log('DELETE /api/products: Processing request')
+    const url = new URL(request.url)
+    const id = url.searchParams.get('id')
     
     if (!id) {
+      console.error('DELETE /api/products: No ID provided')
       return NextResponse.json(
         { error: 'Product ID is required' },
         { status: 400 }
-      );
+      )
     }
     
-    // Convert ID to number and delete the product
-    const productId = parseInt(id, 10);
+    const productId = parseInt(id, 10)
     if (isNaN(productId)) {
+      console.error('DELETE /api/products: Invalid ID format:', id)
       return NextResponse.json(
         { error: 'Invalid product ID' },
         { status: 400 }
-      );
+      )
+    }
+
+    console.log('DELETE /api/products: Deleting product:', productId)
+    await supabase
+      .from('products')
+      .delete()
+      .eq('id', productId)
+    
+    console.log('DELETE /api/products: Fetching updated products list')
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching updated products:', error)
+      return handleDatabaseError(error)
     }
     
-    await prisma.product.delete({
-      where: { id: productId }
-    });
-    
-    // Return the updated product list
-    const updatedProducts = await prisma.product.findMany();
-    return NextResponse.json(updatedProducts);
+    console.log('DELETE /api/products: Successfully deleted product and fetched updates')
+    return NextResponse.json(data)
   } catch (error) {
-    return NextResponse.json(
-      { error: 'Failed to delete product' },
-      { status: 500 }
-    );
+    console.error('DELETE /api/products: Error:', error)
+    return handleDatabaseError(error)
   }
 }
